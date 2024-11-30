@@ -1,0 +1,134 @@
+import os
+import cv2
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+import pathlib
+
+
+# Set the image size and normalization factor
+IMG_SIZE = 128
+NORM_FACTOR = 255.0
+
+def compress_image(image, format='jpg', quality=80):
+    # Check the format and set the appropriate encoding parameters
+    if format.lower() == 'jpg':
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+        ext = '.jpg'
+    elif format.lower() == 'png':
+        encode_param = [int(cv2.IMWRITE_PNG_COMPRESSION), int((100 - quality) / 10)]
+        ext = '.png'
+    elif format.lower() == 'tiff':
+        encode_param = [int(cv2.IMWRITE_TIFF_COMPRESSION), quality]  
+        ext = '.tiff'
+    else:
+        raise ValueError("Unsupported format: {}".format(format))
+
+    # Encode the image to the specified format
+    success, encoded_image = cv2.imencode(ext, image, encode_param)
+    if not success:
+        raise RuntimeError("Image encoding failed")
+
+    # Decode the image back to its original form
+    compressed_image = cv2.imdecode(encoded_image, cv2.IMREAD_COLOR)
+    return compressed_image
+
+
+# Function to calculate the difference image
+def calculate_difference_image(original_image, compressed_image):
+    diff_image = cv2.absdiff(original_image, compressed_image)
+    return diff_image
+
+def preprocess_image(image_path):
+    # Load the forged image (F)
+    original_image = cv2.imread(str(image_path))
+    # original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+
+    # # Compress the image to get Fcomp
+    compressed_image = compress_image(original_image, quality=80)
+
+    # # Calculate Fdiff
+    diff_image = calculate_difference_image(original_image, compressed_image)
+
+    # Resize Fdiff to 160x160 pixels
+    resized_diff_image = cv2.resize(diff_image, (224, 224))
+
+    # Normalize the image
+    normalized_diff_image = resized_diff_image / 255.0
+
+    return normalized_diff_image
+
+# Load images from a directory (adjust the path to where your dataset is stored)
+dataset_path = "/home/nishma/My Project/College_thesis/IFD/archive/testdata"
+data_dir = pathlib.Path(dataset_path)
+images_dict = {
+    'NonForged': list(data_dir.glob('Au/*')),
+    'Forged': list(data_dir.glob('Tp/*')),
+}
+
+labels_dict = {
+    'NonForged': 0,
+    'Forged': 1
+}
+
+X, y = [], []
+
+for label, images in images_dict.items():
+    for image in images:        
+        if image is None:
+            print(f"Failed to load image: {image}")
+            continue
+        
+        processed_image = preprocess_image(image)
+        X.append(processed_image)
+        y.append(labels_dict[label])
+
+X = np.array(X)
+y = np.array(y)
+print(X.shape, y.shape)
+
+
+import tensorflow as tf
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.layers import Dense, Flatten, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+
+# Load the pre-trained VGG16 model
+base_model = VGG16(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+# Freeze the convolutional base
+for layer in base_model.layers:
+    layer.trainable = False
+
+
+# Build the fine-tuned model
+x = base_model.output
+x = Flatten()(x)
+x = Dense(4096, activation='relu')(x)
+x = Dropout(0.5)(x)  # Add dropout to reduce overfitting
+x = Dense(4096, activation='relu')(x)
+x = Dropout(0.5)(x)
+x = Dense(2, activation='softmax')(x)  # Binary classification
+
+# Define the model
+model = Model(inputs=base_model.input, outputs=x)
+
+# Compile the model
+# Compile the model with sparse_categorical_crossentropy
+model.compile(optimizer=Adam(learning_rate=0.0001), 
+              loss='sparse_categorical_crossentropy', 
+              metrics=['accuracy'])
+
+# Split the data into training and validation sets
+from sklearn.model_selection import train_test_split
+train_images, test_images, train_labels, test_labels = train_test_split(X, y, test_size=0.20)
+
+# Train the model
+from tensorflow.keras.callbacks import EarlyStopping
+
+history = model.fit(train_images, train_labels,
+                    validation_data=(test_images, test_labels),
+                    epochs=5)
+
+evaluation = model.evaluate(test_images, test_labels)
