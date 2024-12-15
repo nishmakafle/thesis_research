@@ -60,7 +60,6 @@ class ForensicFeatureExtractor:
                     np.max(np.abs(sb))
                 ])
         
-        # Adjust feature vector to match expected size
         if len(noise_features) > expected_features:
             noise_features = noise_features[:expected_features]  # Truncate
         elif len(noise_features) < expected_features:
