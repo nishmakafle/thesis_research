@@ -4,3 +4,4 @@ venv/
 CASIA2.zip
 .DS_Store
 exported/
+*.h5
